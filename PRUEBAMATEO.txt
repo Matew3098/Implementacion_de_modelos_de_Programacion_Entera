@@ -1,0 +1,138 @@
+**Parte 1: Preprocesamiento de datos
+Celda de código 2: (Creación de tuplas, diccionarios de demanda, capacidad, distancias y demanda total)**
+-----------------------------------------------------------
+# 1. Tuplas con los índices
+I = tuple(sitios.keys())
+J = tuple(comunidades.keys())
+K = tuple(tipos_centro.keys())
+
+# 2. Diccionarios de demanda (d) y capacidad (u)
+d = {j: comunidades[j][1] for j in J}
+u = {k: tipos_centro[k][1] for k in K}
+
+# 3. Diccionario de distancias euclídeas entre cada sitio i y comunidad j
+dist = {}
+for i in I:
+    coord_i = sitios[i][2]
+    for j in J:
+        coord_j = comunidades[j][2]
+        # Distancia = sqrt((x1 - x2)^2 + (y1 - y2)^2)
+        dist[i, j] = math.sqrt((coord_i[0] - coord_j[0])**2 + (coord_i[1] - coord_j[1])**2)
+
+# 4. Demanda total acumulada
+demanda_total = sum(d.values())
+print(f"Demanda total de todas las comunidades: {demanda_total} kg")
+-----------------------------------------
+***Celda de código 3: (Creación del diccionario de costos fijos $f_{ik}$)***
+---------------------------------
+# Costo fijo f[i, k] = (costo base del tipo k) * (factor de costo del sitio i)
+f = {}
+for i in I:
+    factor_sitio = sitios[i][1]
+    for k in K:
+        costo_base = tipos_centro[k][2]
+        f[i, k] = costo_base * factor_sitio
+------------------------------------------------------------
+Parte 2: Formulación Matemática
+Copia este texto dentro de la celda de Markdown que está debajo del título ### Solución: en la Parte 2:
+
+--------------------------------------------------------
+### Modelo de Programación Lineal Entera Mixta (MILP)
+
+**Función Objetivo:**
+Minimizar el costo total mensual (suma de costos fijos de apertura de centros más los costos de transporte de insumos):
+
+$$\min \sum_{i \in I} \sum_{k \in K} f_{ik} \, y_{ik} + \sum_{i \in I} \sum_{j \in J} c \cdot \delta_{ij} \cdot x_{ij}$$
+
+**Sujeto a las siguientes restricciones:**
+
+1. **Satisfacción de la demanda:** Toda la demanda de cada comunidad $j$ debe ser satisfecha.
+   $$\sum_{i \in I} x_{ij} = d_j \quad \forall j \in J$$
+
+2. **Límite de capacidad:** La demanda total despachada desde el sitio $i$ no puede superar la capacidad del centro abierto en dicho sitio.
+   $$\sum_{j \in J} x_{ij} \le \sum_{k \in K} u_k \, y_{ik} \quad \forall i \in I$$
+
+3. **Exclusividad de sitio:** En cada sitio candidato $i$ se puede abrir como máximo un tipo de centro.
+   $$\sum_{k \in K} y_{ik} \le 1 \quad \forall i \in I$$
+
+4. **Naturaleza de las variables:**
+   $$y_{ik} \in \{0,1\} \quad \forall i \in I, k \in K$$
+   $$x_{ij} \ge 0 \quad \forall i \in I, j \in J$$
+
+----------------------------------------------------------------
+Parte 3: Implementación en Python con Gurobi
+Celda de código 4: (Creación del modelo y variables)
+------------------------------------------------------------
+import gurobipy as gp
+from gurobipy import GRB
+
+# Creación del modelo con el nombre requerido
+mdl_amz = gp.Model("Facility_Location_Amazonia")
+
+# Variable binaria y[i,k]: 1 si se abre centro tipo k en sitio i, 0 si no
+y = mdl_amz.addVars(I, K, vtype=GRB.BINARY, name="y")
+
+# Variable continua x[i,j]: cantidad de demanda (kg) de la comunidad j atendida por sitio i
+x = mdl_amz.addVars(I, J, vtype=GRB.CONTINUOUS, lb=0.0, name="x")
+
+-----------------------Celda de código 5: (Definición de la función objetivo)---------
+# Suma de costos fijos + costo de transporte
+costo_fijo = gp.quicksum(f[i, k] * y[i, k] for i in I for k in K)
+costo_transporte = gp.quicksum(c * dist[i, j] * x[i, j] for i in I for j in J)
+
+mdl_amz.setObjective(costo_fijo + costo_transporte, GRB.MINIMIZE)
+
+------------Celda de código 6: (Agregar restricciones, optimizar y mostrar costo total)-----------
+# Restricción 1: Satisfacer la demanda de cada comunidad
+mdl_amz.addConstrs((gp.quicksum(x[i, j] for i in I) == d[j] for j in J), name="Atender_Demanda")
+
+# Restricción 2: Respetar la capacidad del centro abierto
+mdl_amz.addConstrs((gp.quicksum(x[i, j] for j in J) <= gp.quicksum(u[k] * y[i, k] for k in K) for i in I), name="Capacidad_Centro")
+
+# Restricción 3: Máximo un centro por sitio
+mdl_amz.addConstrs((gp.quicksum(y[i, k] for k in K) <= 1 for i in I), name="Max_Un_Centro")
+
+# Resolver el modelo
+mdl_amz.optimize()
+
+# Mostrar costo total mensual resultante
+if mdl_amz.status == GRB.OPTIMAL:
+    print(f"\nCosto total mensual: ${mdl_amz.ObjVal:,.2f}")
+
+----------------------------------------------------
+Parte 4: Resultados
+Celda de código 7: (Formato de tabla especificado en el enunciado)
+------------------------------------------------------
+print("* Ubicación y tipo de centros *")
+print(f"{'Sitio':<6}| {'Nombre':<25}| {'Tipo':<5}| {'Comunidades atendidas':<22}| {'Utilización':<11}")
+print("-" * 79)
+
+costo_fijo_val = 0.0
+costo_transp_val = 0.0
+
+# Recorrer sitios y tipos para imprimir centros abiertos
+for i in I:
+    for k in K:
+        if y[i, k].X > 0.5:
+            # Lista de comunidades que reciben suministros desde este sitio i
+            comunidades_atendidas = [str(j) for j in J if x[i, j].X > 1e-4]
+            carga_total = sum(x[i, j].X for j in J)
+            capacidad = u[k]
+            utilizacion = (carga_total / capacidad) * 100
+            
+            nombre_sitio = sitios[i][0]
+            comunidades_str = ", ".join(comunidades_atendidas)
+            
+            print(f"{i:<6}| {nombre_sitio:<25}| {k:^5}| {comunidades_str:<22}| {utilizacion:>10.1f}%")
+            costo_fijo_val += f[i, k]
+
+# Calcular el costo de transporte final
+for i in I:
+    for j in J:
+        costo_transp_val += c * dist[i, j] * x[i, j].X
+
+costo_total_val = costo_fijo_val + costo_transp_val
+
+print("\n" + "-" * 79)
+print(f"Costo fijo: ${costo_fijo_val:,.2f} | Costo de transporte: ${costo_transp_val:,.2f} | Costo total: ${costo_total_val:,.2f}")
+# fin_k7
