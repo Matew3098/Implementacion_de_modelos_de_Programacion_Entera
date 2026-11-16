@@ -1,0 +1,166 @@
+================================================================================
+SOLUCIÓN LABORATORIO 7: PLANIFICACIÓN DE LA PRODUCCIÓN (LOT SIZING)
+Chocolatería Artesanal Sumak
+================================================================================
+
+--------------------------------------------------------------------------------
+PARTE 1: FORMULACIÓN MATEMÁTICA (Pegar en la celda de Markdown "Solución:")
+--------------------------------------------------------------------------------
+
+### Variables de Decisión
+
+* $x_{it} \in \mathbb{Z}_{\ge 0}$: Cantidad de lotes enteros del producto $i \in I$ a producir en el mes $t \in T$.
+* $y_{it} \in \{0, 1\}$: Variable binaria que toma el valor de $1$ si se prepara la línea para producir el producto $i \in I$ en el mes $t \in T$, y $0$ en caso contrario.
+* $s_{it} \ge 0$: Cantidad de lotes del producto $i \in I$ en inventario al finalizar el período $t \in T_0$.
+
+### Cálculo de la constante $M_{it}$ (M-mayúscula)
+
+La cantidad máxima de lotes de un producto $i$ que pueden fabricarse en un mes $t$ está acotada por las horas disponibles de la planta en ese mes divididas entre las horas que toma cada lote:
+$$M_{it} = \left\lfloor \frac{C_t}{\tau_i} \right\rfloor \quad \forall i \in I, t \in T$$
+
+### Función Objetivo
+
+Minimizar el costo total anual (costos fijos de preparación + costos variables de producción + costos de almacenamiento):
+
+$$\min \sum_{i \in I} \sum_{t \in T} f_i \, y_{it} + \sum_{i \in I} \sum_{t \in T} p_{it} \, x_{it} + \sum_{i \in I} \sum_{t \in T} h_t \, s_{it}$$
+
+### Restricciones
+
+1. **Inventario inicial:**
+   $$s_{i,0} = s_i^0 \quad \forall i \in I$$
+
+2. **Balance de inventarios en cada período:**
+   $$s_{i, t-1} + x_{it} - s_{it} = d_{it} \quad \forall i \in I, t \in T$$
+
+3. **Stock de seguridad mínimo al final de cada mes:**
+   $$s_{it} \ge s_i^{\min} \quad \forall i \in I, t \in T$$
+
+4. **Capacidad total de la bodega:**
+   $$\sum_{i \in I} s_{it} \le W \quad \forall t \in T$$
+
+5. **Capacidad de horas de línea de procesamiento:**
+   $$\sum_{i \in I} \tau_i \, x_{it} \le C_t \quad \forall t \in T$$
+
+6. **Activación del costo fijo de preparación:**
+   $$x_{it} \le \left\lfloor \frac{C_t}{\tau_i} \right\rfloor y_{it} \quad \forall i \in I, t \in T$$
+
+7. **Naturaleza y dominio de las variables:**
+   $$x_{it} \in \mathbb{Z}_{\ge 0}, \quad y_{it} \in \{0, 1\} \quad \forall i \in I, t \in T$$
+   $$s_{it} \ge 0 \quad \forall i \in I, t \in T_0$$
+
+
+--------------------------------------------------------------------------------
+PARTE 2: IMPLEMENTACIÓN EN GUROBI
+--------------------------------------------------------------------------------
+
+>>> CELDA 3 (Crear el modelo y las variables de decisión):
+
+# Creación del modelo
+mdl = gp.Model("Planificacion_Chocolate_Sumak")
+
+# Variables de decisión
+x = mdl.addVars(I, T, vtype=GRB.INTEGER, lb=0, name="x")
+y = mdl.addVars(I, T, vtype=GRB.BINARY, name="y")
+s = mdl.addVars(I, T0, vtype=GRB.CONTINUOUS, lb=0.0, name="s")
+
+
+>>> CELDA 4 (Definir la función objetivo):
+
+# Expresiones de costos usando expresiones especiales de gurobipy
+costo_prep = gp.quicksum(f[i] * y[i, t] for i in I for t in T)
+costo_prod = p.prod(x)
+costo_alm  = gp.quicksum(h[t] * s[i, t] for i in I for t in T)
+
+# Función objetivo
+mdl.setObjective(costo_prep + costo_prod + costo_alm, GRB.MINIMIZE)
+
+
+>>> CELDA 5 (Agregar restricciones, resolver y mostrar costo total):
+
+# 1. Inventario inicial
+mdl.addConstrs((s[i, 0] == s0[i] for i in I), name="Inv_Inicial")
+
+# 2. Balance de inventarios
+mdl.addConstrs((s[i, t-1] + x[i, t] - s[i, t] == d[i, t] for i in I for t in T), name="Balance")
+
+# 3. Stock de seguridad
+mdl.addConstrs((s[i, t] >= smin[i] for i in I for t in T), name="Stock_Seguridad")
+
+# 4. Capacidad de bodega (guardada en c_bodega para la Parte 4)
+c_bodega = mdl.addConstrs((s.sum('*', t) <= W for t in T), name="Capacidad_Bodega")
+
+# 5. Capacidad de horas de línea
+mdl.addConstrs((gp.quicksum(tau[i] * x[i, t] for i in I) <= C[t] for t in T), name="Capacidad_Horas")
+
+# 6. Activación del costo fijo de preparación (M = C[t] // tau[i])
+mdl.addConstrs((x[i, t] <= (C[t] // tau[i]) * y[i, t] for i in I for t in T), name="Preparacion")
+
+# Resolver el modelo
+mdl.optimize()
+
+# Mostrar costo total
+costo_total_base = mdl.ObjVal
+print(f"\nCosto total: {costo_total_base:,.2f} USD")
+
+
+--------------------------------------------------------------------------------
+PARTE 3: RESULTADOS Y ANÁLISIS
+--------------------------------------------------------------------------------
+
+>>> CELDA 6 (Desglose de costos y tabla mensual):
+
+# Cálculo de componentes de costo en la solución base
+val_prod_base = sum(p[i, t] * x[i, t].X for i in I for t in T)
+val_prep_base = sum(f[i] * y[i, t].X for i in I for t in T)
+val_alm_base  = sum(h[t] * s[i, t].X for i in I for t in T)
+
+print("Costo total desglosado:")
+print(f"  Producción: {val_prod_base:,.2f} | Preparación: {val_prep_base:,.2f} | Almacenamiento: {val_alm_base:,.2f}\n")
+
+print(f"{'Mes':<12}| {'Producción N70/N85/Leche':^24} | {'Inventario N70/N85/Leche':^24} | {'Bodega':^6} | {'Horas':^5}")
+print("-" * 93)
+
+for t in T:
+    prod_str = f"{round(x[1, t].X):>3} / {round(x[2, t].X):>3} / {round(x[3, t].X):>3}"
+    inv_str  = f"{round(s[1, t].X):>3} / {round(s[2, t].X):>3} / {round(s[3, t].X):>3}"
+    bodega_t = round(sum(s[i, t].X for i in I))
+    horas_t  = round(sum(tau[i] * x[i, t].X for i in I))
+    
+    print(f"{nomT[t]:<12}| {prod_str:^24} | {inv_str:^24} | {bodega_t:>6} | {horas_t:>5}")
+
+
+--------------------------------------------------------------------------------
+PARTE 4 (OPCIONAL): AMPLIACIÓN DE LA BODEGA
+--------------------------------------------------------------------------------
+
+>>> CELDA 7 (Código de actualización de RHS y evaluación):
+
+# Modificar el lado derecho (RHS) de las restricciones c_bodega de W a W + 10
+for t in T:
+    c_bodega[t].RHS = W + 10
+
+# Re-optimizar sin reconstruir el modelo
+mdl.optimize()
+
+# Nuevos costos
+costo_total_amp = mdl.ObjVal
+ahorro_anual = costo_total_base - costo_total_amp
+
+val_prod_amp = sum(p[i, t] * x[i, t].X for i in I for t in T)
+val_prep_amp = sum(f[i] * y[i, t].X for i in I for t in T)
+val_alm_amp  = sum(h[t] * s[i, t].X for i in I for t in T)
+
+var_prod = val_prod_amp - val_prod_base
+var_prep = val_prep_amp - val_prep_base
+var_alm  = val_alm_amp - val_alm_base
+
+decision = "AMPLIAR" if ahorro_anual > 1600 else "NO AMPLIAR"
+
+print(f"\nCosto con bodega ampliada: {costo_total_amp:,.2f} USD | Ahorro anual: {ahorro_anual:,.2f} USD")
+print(f"Variación por componente: Producción: {var_prod:+,.2f} | Preparación: {var_prep:+,.2f} | Almacenamiento: {var_alm:+,.2f}")
+print(f"Decisión: {decision}")
+
+
+>>> CELDA DE TEXTO FINAL (Explicación de por qué cambia el costo):
+
+Al ampliar la capacidad de la bodega, la planta puede fabricar lotes por adelantado durante los meses donde el precio del cacao es más bajo y agrupar lotes para evitar encender la línea repetidamente. Como resultado, **disminuyen los costos de producción y preparación**, compensando con creces el ligero **aumento en el costo de almacenamiento** por guardar mayor inventario.
